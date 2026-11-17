@@ -56,6 +56,8 @@ jobs:
           add-to-path: true
           link-to-sdk: true
 
+      - uses: android-actions/setup-android@v3
+
       - name: Install Android SDK packages
         env:
           PINNED_NDK: ${{ steps.ndk.outputs.ndk-path }}
