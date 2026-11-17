@@ -57,7 +57,11 @@ jobs:
           link-to-sdk: true
 
       - name: Install Android SDK packages
+        env:
+          PINNED_NDK: ${{ steps.ndk.outputs.ndk-path }}
         run: |
+          echo "ANDROID_NDK_HOME=$PINNED_NDK" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$PINNED_NDK" >> "$GITHUB_ENV"
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager 'platforms;android-37.0' 'platforms;android-36' 'build-tools;37.0.0' 'build-tools;36.0.0'
 
