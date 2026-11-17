@@ -1,0 +1,100 @@
+name: Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [wg-adb-forward-v0.9.3]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wg-adb-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    name: Test WG forwarding and build ARM64 APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: |
+            core/go.sum
+            core/Clash.Meta/go.sum
+
+      - name: Test WireGuard forwarding
+        working-directory: core/Clash.Meta
+        run: >-
+          go test -tags with_gvisor ./component/wgforward ./adapter/outbound ./tunnel
+          -run 'Test(Parse|Relay|Source|Cancellation|Partial|CloseConcurrent|WireGuard)'
+          -count=1 -timeout 120s
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.6'
+          cache: true
+
+      - name: Setup NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r28c
+          add-to-path: true
+          link-to-sdk: true
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platforms;android-37.0' 'platforms;android-36' 'build-tools;37.0.0' 'build-tools;36.0.0'
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --target aarch64-linux-android
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Analyze Dart
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test Flutter core protocol
+        run: |
+          cp pubspec.yaml /tmp/wg-pubspec.yaml
+          trap 'cp /tmp/wg-pubspec.yaml pubspec.yaml' EXIT
+          sed -i 's/build_assets: true/build_assets: false/g' pubspec.yaml
+          flutter test --no-pub --dart-define=SAFE_MODE=true test/core/protocol_contract_test.dart
+
+      - name: Build APK
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          flutter build apk --debug --no-pub --target-platform=android-arm64 \
+            --build-name=0.9.3-wg-adb-forward --build-number=2026111701
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-debug.apk dist/FlClash-0.9.3-wg-adb-forward-arm64.apk
+          git rev-parse HEAD > dist/app-commit.txt
+          git -C core/Clash.Meta rev-parse HEAD > dist/kernel-commit.txt
+          cd dist
+          sha256sum *.apk > SHA256SUMS
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlClash-wg-adb-forward-arm64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
